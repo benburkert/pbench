@@ -12,7 +12,7 @@ import (
 )
 
 type B struct {
-	*sync.Mutex
+	sync.Mutex
 	*testing.B
 
 	percs []float64
@@ -22,7 +22,6 @@ type B struct {
 
 func ReportPercentiles(b *testing.B, percs ...float64) *B {
 	return &B{
-		Mutex:  new(sync.Mutex),
 		B:      b,
 		percs:  percs,
 		stream: quantile.NewTargeted(percs...),
@@ -44,9 +43,10 @@ func (b *B) report() {
 	b.Lock()
 	defer b.Unlock()
 
-	name := reflect.ValueOf(b.B).Elem().FieldByName("name").String()
-	maxLen := reflect.ValueOf(b.B).Elem().FieldByName("context").Elem().FieldByName("maxLen").Int()
-	n := int(reflect.ValueOf(b.B).Elem().FieldByName("result").FieldByName("N").Int())
+	v := reflect.ValueOf(b.B).Elem()
+	name := v.FieldByName("name").String()
+	maxLen := v.FieldByName("context").Elem().FieldByName("maxLen").Int()
+	n := int(v.FieldByName("result").FieldByName("N").Int())
 
 	for _, perc := range b.percs {
 		result := &testing.BenchmarkResult{
@@ -54,7 +54,12 @@ func (b *B) report() {
 			T: time.Duration(b.stream.Query(perc)) * time.Duration(b.stream.Count()),
 		}
 
-		benchName := fmt.Sprintf("%s/P%02.5g-%d", name, perc*100, runtime.GOMAXPROCS(-1))
+		var cpuList string
+		if cpus := runtime.GOMAXPROCS(-1); cpus > 1 {
+			cpuList = fmt.Sprintf("-%d", cpus)
+		}
+
+		benchName := fmt.Sprintf("%s/P%02.5g%s", name, perc*100, cpuList)
 		fmt.Printf("%-*s\t%s\n", maxLen, benchName, result)
 	}
 }
