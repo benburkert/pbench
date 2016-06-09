@@ -51,7 +51,7 @@ func (b *B) report() {
 	for _, perc := range b.percs {
 		result := &testing.BenchmarkResult{
 			N: n,
-			T: time.Duration(b.stream.Query(perc)) * time.Duration(b.stream.Count()),
+			T: time.Duration(b.stream.Query(perc)) * time.Duration(n),
 		}
 
 		var cpuList string
@@ -66,27 +66,35 @@ func (b *B) report() {
 
 func (b *B) RunParallel(body func(*PB)) {
 	b.B.RunParallel(func(pb *testing.PB) {
-		body(&PB{
-			PB: pb,
-			B:  b,
-		})
+		body(&PB{PB: pb, B: b})
 	})
 }
 
 type PB struct {
 	*testing.PB
 	*B
+
+	t time.Time
 }
 
 func (pb *PB) Next() bool {
-	defer func(s time.Time) { pb.record(time.Since(s)) }(time.Now())
-
-	return pb.PB.Next()
+	if pb.PB.Next() {
+		pb.record()
+		return true
+	}
+	return false
 }
 
-func (pb *PB) record(d time.Duration) {
+func (pb *PB) record() {
 	pb.Lock()
 	defer pb.Unlock()
 
-	pb.stream.Insert(float64(d))
+	if pb.t.IsZero() {
+		pb.t = time.Now()
+		return
+	}
+
+	now := time.Now()
+	pb.stream.Insert(float64(time.Since(pb.t)))
+	pb.t = now
 }
