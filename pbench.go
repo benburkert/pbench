@@ -13,6 +13,7 @@ import (
 	"github.com/aristanetworks/goarista/atime"
 )
 
+// B wraps a testing.B and adds percentiles.
 type B struct {
 	sync.Mutex
 	*testing.B
@@ -22,6 +23,7 @@ type B struct {
 	pbs []*PB
 }
 
+// New initializes a B from a wrapped testing.B.
 func New(b *testing.B) *B {
 	return &B{
 		B:     b,
@@ -30,10 +32,12 @@ func New(b *testing.B) *B {
 	}
 }
 
+// ReportPercentile records and reports a percentile in sub-benchmark results.
 func (b *B) ReportPercentile(perc float64) {
 	b.percs = append(b.percs, perc)
 }
 
+// Run benchmarks f as a subbenchmark with the given name.
 func (b *B) Run(name string, f func(b *B)) bool {
 	innerB := &B{percs: b.percs}
 	defer innerB.report()
@@ -80,6 +84,7 @@ func (b *B) report() {
 	}
 }
 
+// RunParallel runs a benchmark in parallel.
 func (b *B) RunParallel(body func(*PB)) {
 	b.B.RunParallel(func(pb *testing.PB) {
 		body(b.pb(pb))
@@ -98,6 +103,7 @@ func (b *B) pb(inner *testing.PB) *PB {
 	return pb
 }
 
+// A PB is used by RunParallel for running parallel benchmarks.
 type PB struct {
 	*testing.PB
 
@@ -106,6 +112,7 @@ type PB struct {
 	idx  int
 }
 
+// Next reports whether there are more iterations to execute.
 func (pb *PB) Next() bool {
 	if pb.PB.Next() {
 		pb.record()
