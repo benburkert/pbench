@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aristanetworks/goarista/atime"
 	"github.com/bmizerany/perks/quantile"
 )
 
@@ -44,8 +45,8 @@ func (b *B) report() {
 
 	stream := quantile.NewTargeted(b.percs...)
 	for _, pb := range b.pbs {
-		for _, d := range pb.durs {
-			stream.Insert(d)
+		for _, d := range pb.s[:pb.idx] {
+			stream.Insert(float64(d))
 		}
 	}
 
@@ -78,9 +79,8 @@ func (b *B) RunParallel(body func(*PB)) {
 
 func (b *B) pb(inner *testing.PB) *PB {
 	pb := &PB{
-		PB:   inner,
-		B:    b,
-		durs: make([]float64, 0, b.N),
+		PB: inner,
+		s:  make([]uint64, b.N),
 	}
 
 	b.Lock()
@@ -91,10 +91,10 @@ func (b *B) pb(inner *testing.PB) *PB {
 
 type PB struct {
 	*testing.PB
-	*B
 
-	t    time.Time
-	durs []float64
+	s    []uint64
+	tick uint64
+	idx  int
 }
 
 func (pb *PB) Next() bool {
@@ -106,15 +106,13 @@ func (pb *PB) Next() bool {
 }
 
 func (pb *PB) record() {
-	pb.Lock()
-	defer pb.Unlock()
-
-	if pb.t.IsZero() {
-		pb.t = time.Now()
+	if pb.tick == 0 {
+		pb.tick = atime.NanoTime()
 		return
 	}
 
-	now := time.Now()
-	pb.durs = append(pb.durs, float64(time.Since(pb.t)))
-	pb.t = now
+	now := atime.NanoTime()
+	pb.s[pb.idx] = now - pb.tick
+	pb.idx++
+	pb.tick = now
 }
