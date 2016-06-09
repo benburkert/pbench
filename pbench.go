@@ -1,3 +1,4 @@
+// Package pbench reports percentiles for parallel benchmarks.
 package pbench
 
 import (
