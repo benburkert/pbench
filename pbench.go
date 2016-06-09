@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"sort"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/aristanetworks/goarista/atime"
-	"github.com/bmizerany/perks/quantile"
 )
 
 type B struct {
@@ -17,19 +17,24 @@ type B struct {
 	*testing.B
 
 	percs []float64
-	pbs   []*PB
+
+	pbs []*PB
 }
 
-func ReportPercentiles(b *testing.B, percs ...float64) *B {
+func New(b *testing.B) *B {
 	return &B{
 		B:     b,
-		percs: percs,
+		percs: []float64{},
 		pbs:   []*PB{},
 	}
 }
 
+func (b *B) ReportPercentile(perc float64) {
+	b.percs = append(b.percs, perc)
+}
+
 func (b *B) Run(name string, f func(b *B)) bool {
-	innerB := ReportPercentiles(nil, b.percs...)
+	innerB := &B{percs: b.percs}
 	defer innerB.report()
 
 	return b.B.Run(name, func(tb *testing.B) {
@@ -43,12 +48,13 @@ func (b *B) report() {
 	b.Lock()
 	defer b.Unlock()
 
-	stream := quantile.NewTargeted(b.percs...)
+	durations := []float64{}
 	for _, pb := range b.pbs {
 		for _, d := range pb.s[:pb.idx] {
-			stream.Insert(float64(d))
+			durations = append(durations, float64(d))
 		}
 	}
+	sort.Float64s(durations)
 
 	v := reflect.ValueOf(b.B).Elem()
 	name := v.FieldByName("name").String()
@@ -56,9 +62,11 @@ func (b *B) report() {
 	n := int(v.FieldByName("result").FieldByName("N").Int())
 
 	for _, perc := range b.percs {
+		idx := int(float64(len(durations)) * perc)
+		pvalue := time.Duration(durations[idx])
 		result := &testing.BenchmarkResult{
 			N: n,
-			T: time.Duration(stream.Query(perc)) * time.Duration(n),
+			T: pvalue * time.Duration(n),
 		}
 
 		var cpuList string
