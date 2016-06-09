@@ -16,15 +16,14 @@ type B struct {
 	*testing.B
 
 	percs []float64
-
-	stream *quantile.Stream
+	pbs   []*PB
 }
 
 func ReportPercentiles(b *testing.B, percs ...float64) *B {
 	return &B{
-		B:      b,
-		percs:  percs,
-		stream: quantile.NewTargeted(percs...),
+		B:     b,
+		percs: percs,
+		pbs:   []*PB{},
 	}
 }
 
@@ -43,6 +42,13 @@ func (b *B) report() {
 	b.Lock()
 	defer b.Unlock()
 
+	stream := quantile.NewTargeted(b.percs...)
+	for _, pb := range b.pbs {
+		for _, d := range pb.durs {
+			stream.Insert(d)
+		}
+	}
+
 	v := reflect.ValueOf(b.B).Elem()
 	name := v.FieldByName("name").String()
 	maxLen := v.FieldByName("context").Elem().FieldByName("maxLen").Int()
@@ -51,7 +57,7 @@ func (b *B) report() {
 	for _, perc := range b.percs {
 		result := &testing.BenchmarkResult{
 			N: n,
-			T: time.Duration(b.stream.Query(perc)) * time.Duration(n),
+			T: time.Duration(stream.Query(perc)) * time.Duration(n),
 		}
 
 		var cpuList string
@@ -66,15 +72,29 @@ func (b *B) report() {
 
 func (b *B) RunParallel(body func(*PB)) {
 	b.B.RunParallel(func(pb *testing.PB) {
-		body(&PB{PB: pb, B: b})
+		body(b.pb(pb))
 	})
+}
+
+func (b *B) pb(inner *testing.PB) *PB {
+	pb := &PB{
+		PB:   inner,
+		B:    b,
+		durs: make([]float64, 0, b.N),
+	}
+
+	b.Lock()
+	defer b.Unlock()
+	b.pbs = append(b.pbs, pb)
+	return pb
 }
 
 type PB struct {
 	*testing.PB
 	*B
 
-	t time.Time
+	t    time.Time
+	durs []float64
 }
 
 func (pb *PB) Next() bool {
@@ -95,6 +115,6 @@ func (pb *PB) record() {
 	}
 
 	now := time.Now()
-	pb.stream.Insert(float64(time.Since(pb.t)))
+	pb.durs = append(pb.durs, float64(time.Since(pb.t)))
 	pb.t = now
 }
