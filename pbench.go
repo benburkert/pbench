@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aristanetworks/goarista/atime"
+	"github.com/gavv/monotime"
 )
 
 // B wraps a testing.B and adds percentiles.
@@ -21,6 +21,9 @@ type B struct {
 	percs []float64
 
 	pbs []*PB
+
+	subBs map[int]*B
+	cpus  []int
 }
 
 // New initializes a B from a wrapped testing.B.
@@ -29,6 +32,8 @@ func New(b *testing.B) *B {
 		B:     b,
 		percs: []float64{},
 		pbs:   []*PB{},
+		subBs: map[int]*B{},
+		cpus:  []int{},
 	}
 }
 
@@ -39,13 +44,13 @@ func (b *B) ReportPercentile(perc float64) {
 
 // Run benchmarks f as a subbenchmark with the given name.
 func (b *B) Run(name string, f func(b *B)) bool {
-	innerB := &B{percs: b.percs}
-	defer innerB.report()
+	defer b.report()
 
 	return b.B.Run(name, func(tb *testing.B) {
-		innerB.B = tb
-
-		f(innerB)
+		subB, cpus := &B{B: tb, percs: b.percs}, runtime.GOMAXPROCS(-1)
+		b.subBs[cpus] = subB
+		b.cpus = append(b.cpus, cpus)
+		f(subB)
 	})
 }
 
@@ -53,35 +58,49 @@ func (b *B) report() {
 	b.Lock()
 	defer b.Unlock()
 
-	durations := []float64{}
-	for _, pb := range b.pbs {
-		for _, d := range pb.s[:pb.idx] {
-			durations = append(durations, float64(d))
+	cpus := b.cpus[1:]
+	for _, perc := range b.percs {
+		reported := map[int]struct{}{}
+		for _, i := range cpus {
+			if _, ok := reported[i]; !ok {
+				b.subBs[i].reportSub(b, perc, i)
+			}
+			reported[i] = struct{}{}
 		}
 	}
-	sort.Float64s(durations)
+}
+
+func (b *B) reportSub(parent *B, perc float64, cpus int) {
+	var durations durationSlice
+	for _, pb := range b.pbs {
+		durations = append(durations, pb.s[:pb.idx]...)
+	}
+	sort.Sort(durations)
 
 	v := reflect.ValueOf(b.B).Elem()
 	name := v.FieldByName("name").String()
-	maxLen := v.FieldByName("context").Elem().FieldByName("maxLen").Int()
 	n := int(v.FieldByName("result").FieldByName("N").Int())
 
-	for _, perc := range b.percs {
-		idx := int(float64(len(durations)) * perc)
-		pvalue := time.Duration(durations[idx])
-		result := &testing.BenchmarkResult{
-			N: n,
-			T: pvalue * time.Duration(n),
-		}
-
-		var cpuList string
-		if cpus := runtime.GOMAXPROCS(-1); cpus > 1 {
-			cpuList = fmt.Sprintf("-%d", cpus)
-		}
-
-		benchName := fmt.Sprintf("%s/P%02.5g%s", name, perc*100, cpuList)
-		fmt.Printf("%-*s\t%s\n", maxLen, benchName, result)
+	ctx := v.FieldByName("context")
+	if ctx.IsNil() {
+		ctx = reflect.ValueOf(parent.B).Elem().FieldByName("context")
 	}
+	maxLen := ctx.Elem().FieldByName("maxLen").Int()
+
+	idx := int(float64(len(durations)) * perc)
+	pvalue := time.Duration(durations[idx])
+	result := &testing.BenchmarkResult{
+		N: n,
+		T: pvalue * time.Duration(n),
+	}
+
+	var cpuList string
+	if cpus > 1 {
+		cpuList = fmt.Sprintf("-%d", cpus)
+	}
+
+	benchName := fmt.Sprintf("%s/P%02.5g%s", name, perc*100, cpuList)
+	fmt.Printf("%-*s\t%s\n", maxLen, benchName, result)
 }
 
 // RunParallel runs a benchmark in parallel.
@@ -94,7 +113,7 @@ func (b *B) RunParallel(body func(*PB)) {
 func (b *B) pb(inner *testing.PB) *PB {
 	pb := &PB{
 		PB: inner,
-		s:  make([]uint64, b.N),
+		s:  make(durationSlice, b.N),
 	}
 
 	b.Lock()
@@ -107,8 +126,8 @@ func (b *B) pb(inner *testing.PB) *PB {
 type PB struct {
 	*testing.PB
 
-	s    []uint64
-	tick uint64
+	s    durationSlice
+	tick time.Duration
 	idx  int
 }
 
@@ -123,12 +142,18 @@ func (pb *PB) Next() bool {
 
 func (pb *PB) record() {
 	if pb.tick == 0 {
-		pb.tick = atime.NanoTime()
+		pb.tick = monotime.Now()
 		return
 	}
 
-	now := atime.NanoTime()
+	now := monotime.Now()
 	pb.s[pb.idx] = now - pb.tick
 	pb.idx++
 	pb.tick = now
 }
+
+type durationSlice []time.Duration
+
+func (p durationSlice) Len() int           { return len(p) }
+func (p durationSlice) Less(i, j int) bool { return p[i] < p[j] }
+func (p durationSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
