@@ -47,7 +47,7 @@ func (b *B) Run(name string, f func(b *B)) bool {
 	defer b.report()
 
 	return b.B.Run(name, func(tb *testing.B) {
-		subB, cpus := &B{B: tb, percs: b.percs}, runtime.GOMAXPROCS(-1)
+		subB, cpus := &B{B: tb, percs: b.percs, subBs: map[int]*B{}}, runtime.GOMAXPROCS(-1)
 		b.subBs[cpus] = subB
 		b.cpus = append(b.cpus, cpus)
 		f(subB)
